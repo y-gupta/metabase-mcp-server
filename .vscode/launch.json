@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Launch Program",
+      "skipFiles": ["<node_internals>/**"],
+      "program": "${workspaceFolder}/build/index.js",
+      "preLaunchTask": "npm: build",
+      "outFiles": ["${workspaceFolder}/build/**/*.js"],
+      "sourceMaps": true,
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Launch Inspector",
+      "skipFiles": ["<node_internals>/**"],
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["@modelcontextprotocol/inspector", "build/index.js"],
+      "preLaunchTask": "npm: build",
+      "outFiles": ["${workspaceFolder}/build/**/*.js"],
+      "sourceMaps": true,
+      "env": {
+        "NODE_ENV": "development"
+      }
+    }
+  ]
+}

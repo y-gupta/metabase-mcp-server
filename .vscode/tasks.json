@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$tsc"],
+      "label": "npm: build",
+      "detail": "tsc && 권한 설정"
+    },
+    {
+      "type": "npm",
+      "script": "watch",
+      "group": "build",
+      "problemMatcher": ["$tsc-watch"],
+      "label": "npm: watch",
+      "detail": "tsc --watch",
+      "isBackground": true
+    },
+    {
+      "type": "npm",
+      "script": "lint",
+      "problemMatcher": ["$eslint-stylish"],
+      "label": "npm: lint",
+      "detail": "eslint 코드 검사"
+    },
+    {
+      "type": "npm",
+      "script": "dev",
+      "problemMatcher": [],
+      "label": "npm: dev",
+      "detail": "빌드 후 실행"
+    }
+  ]
+}
