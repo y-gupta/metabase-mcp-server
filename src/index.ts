@@ -124,6 +124,94 @@ class MetabaseServer {
       await this.server.close();
       process.exit(0);
     });
+
+    // Verify tool schemas on startup
+    this._verifyToolSchemas();
+  }
+
+  private async _verifyToolSchemas() {
+    this.logInfo("Attempting to verify tool schemas...");
+    // The Server class in the SDK has a public `requestHandlers` Map.
+    const listToolsHandler = (this.server as any).requestHandlers.get(ListToolsRequestSchema.shape.method.value);
+
+    if (listToolsHandler) {
+      try {
+        // We need to provide a dummy context object for the handler.
+        // The actual context content doesn't matter for 'tools/list'.
+        const dummyContext = {
+          traceId: `verification-${this.generateRequestId()}`,
+          auth: null 
+        };
+        const toolsResponse = await listToolsHandler({ method: "tools/list" } as any, dummyContext as any);
+        
+        if (!toolsResponse || !toolsResponse.tools) {
+          this.logError("Tool schema verification failed: tools/list response is invalid or missing 'tools' array.", new Error("Invalid tools/list response"));
+          return;
+        }
+        const tools = toolsResponse.tools;
+        
+        this._checkGetDatabaseSchemaTool(tools);
+        this._checkGetPostgresPerformanceDiagnosticsTool(tools);
+        this.logInfo("Tool schema verification successful.");
+      } catch (error) {
+        this.logError("Tool schema verification failed during handler execution", error);
+      }
+    } else {
+      this.logWarn("Could not find ListToolsRequestSchema handler for verification. This might indicate an issue with server setup or SDK internals.");
+    }
+  }
+
+  private _checkGetDatabaseSchemaTool(tools: any[]) {
+    const toolName = "get_database_schema";
+    const tool = tools.find(t => t.name === toolName);
+
+    if (!tool) {
+      this.logError(`Schema Check Failed: Tool "${toolName}" not found.`, new Error(`Tool ${toolName} missing`));
+      return;
+    }
+    if (!tool.description || typeof tool.description !== 'string' || tool.description.trim() === '') {
+      this.logError(`Schema Check Failed: Tool "${toolName}" description is invalid.`, new Error(`${toolName} description error`));
+    }
+    if (!tool.inputSchema || tool.inputSchema.type !== 'object') {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.type is not 'object'.`, new Error(`${toolName} inputSchema.type error`));
+    }
+    if (!tool.inputSchema.properties || !tool.inputSchema.properties.database_id) {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.properties.database_id is missing.`, new Error(`${toolName} database_id property missing`));
+    } else if (tool.inputSchema.properties.database_id.type !== 'number') {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.properties.database_id.type is not 'number'.`, new Error(`${toolName} database_id type error`));
+    }
+    if (!tool.inputSchema.required || !Array.isArray(tool.inputSchema.required) || !tool.inputSchema.required.includes('database_id')) {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.required does not include 'database_id'.`, new Error(`${toolName} required field error`));
+    }
+  }
+
+  private _checkGetPostgresPerformanceDiagnosticsTool(tools: any[]) {
+    const toolName = "get_postgres_performance_diagnostics";
+    const tool = tools.find(t => t.name === toolName);
+
+    if (!tool) {
+      this.logError(`Schema Check Failed: Tool "${toolName}" not found.`, new Error(`Tool ${toolName} missing`));
+      return;
+    }
+    if (!tool.description || typeof tool.description !== 'string' || tool.description.trim() === '') {
+      this.logError(`Schema Check Failed: Tool "${toolName}" description is invalid.`, new Error(`${toolName} description error`));
+    }
+    if (!tool.inputSchema || tool.inputSchema.type !== 'object') {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.type is not 'object'.`, new Error(`${toolName} inputSchema.type error`));
+    }
+    const props = tool.inputSchema.properties;
+    if (!props || !props.database_id || props.database_id.type !== 'number') {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.properties.database_id is invalid.`, new Error(`${toolName} database_id error`));
+    }
+    if (!props || !props.num_slow_queries || props.num_slow_queries.type !== 'number') {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.properties.num_slow_queries is invalid.`, new Error(`${toolName} num_slow_queries error`));
+    }
+    if (!props || !props.target_table_name || props.target_table_name.type !== 'string') {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.properties.target_table_name is invalid.`, new Error(`${toolName} target_table_name error`));
+    }
+    if (!tool.inputSchema.required || !Array.isArray(tool.inputSchema.required) || !tool.inputSchema.required.includes('database_id')) {
+      this.logError(`Schema Check Failed: Tool "${toolName}" inputSchema.required does not include 'database_id'.`, new Error(`${toolName} required field error`));
+    }
   }
 
   // Enhanced logging utilities
@@ -512,6 +600,44 @@ class MetabaseServer {
               },
               required: ["database_id", "query"]
             }
+          },
+          {
+            name: "get_database_schema",
+            description: "Get the schema of a specific database (tables, columns, types) connected to Metabase.",
+            inputSchema: {
+              type: "object",
+              properties": {
+                database_id: {
+                  type: "number",
+                  description: "ID of the Metabase database to get schema for"
+                }
+              },
+              required: ["database_id"]
+            }
+          },
+          {
+            name: "get_postgres_performance_diagnostics",
+            description: "Get performance diagnostics for a PostgreSQL database from Metabase (e.g., slow queries, index usage).",
+            inputSchema: {
+              type: "object",
+              properties: {
+                database_id: {
+                  type: "number",
+                  description: "ID of the PostgreSQL database in Metabase to diagnose"
+                },
+                num_slow_queries: {
+                  type: "number",
+                  description: "Number of slowest queries to retrieve (default: 10)",
+                  optional: true
+                },
+                target_table_name: {
+                  type: "string",
+                  description: "Specific table name to analyze for index usage and scan frequency",
+                  optional: true
+                }
+              },
+              required: ["database_id"]
+            }
           }
         ]
       };
@@ -543,6 +669,8 @@ class MetabaseServer {
               }]
             };
           }
+
+          // Removed duplicated get_database_schema case from here
 
           case "list_cards": {
             this.logDebug('Fetching all cards/questions from Metabase');
@@ -669,6 +797,67 @@ class MetabaseServer {
             };
           }
 
+          case "get_database_schema": {
+            const databaseId = request.params?.arguments?.database_id;
+            if (!databaseId || typeof databaseId !== 'number') {
+              this.logWarn('Missing or invalid database_id parameter in get_database_schema request', { requestId });
+              throw new McpError(
+                ErrorCode.InvalidParams,
+                "database_id parameter is required and must be a number"
+              );
+            }
+
+            this.logDebug(`Fetching schema for database ID: ${databaseId}`, { requestId });
+            const response = await this.request<any>(`/api/database/${databaseId}/metadata`);
+            this.logInfo(`Successfully retrieved schema for database ID: ${databaseId}`, { requestId });
+
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify(response, null, 2)
+              }]
+            };
+          }
+
+          case "get_postgres_performance_diagnostics": {
+            const args = request.params?.arguments;
+            const databaseId = args?.database_id;
+            let numSlowQueries = args?.num_slow_queries;
+            const targetTableName = args?.target_table_name;
+            // const requestId = this.generateRequestId(); // requestId is already generated at the start of CallToolRequestSchema
+
+            if (!databaseId || typeof databaseId !== 'number') {
+              this.logWarn('Missing or invalid database_id parameter for get_postgres_performance_diagnostics', { requestId, args });
+              throw new McpError(ErrorCode.InvalidParams, "database_id is required and must be a number.");
+            }
+            
+            if (numSlowQueries === undefined) {
+              numSlowQueries = 10;
+            } else if (typeof numSlowQueries !== 'number' || numSlowQueries <= 0) {
+              this.logWarn('Invalid num_slow_queries parameter, using default 10', { requestId, numSlowQueriesProvided: numSlowQueries });
+              numSlowQueries = 10;
+            }
+            
+            let validatedTargetTableName: string | undefined = undefined;
+            if (targetTableName !== undefined) {
+              if (typeof targetTableName === 'string' && targetTableName.trim() !== '') {
+                validatedTargetTableName = targetTableName;
+              } else {
+                this.logWarn('Invalid target_table_name parameter (e.g., empty or not a string), will be ignored.', { requestId, targetTableNameProvided: targetTableName });
+              }
+            }
+
+            this.logDebug('Fetching PostgreSQL performance diagnostics', { requestId, databaseId, numSlowQueries, targetTableName: validatedTargetTableName });
+            const diagnostics = await this._fetchPostgresDiagnostics(databaseId, numSlowQueries, validatedTargetTableName, requestId);
+
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify(diagnostics, null, 2)
+              }]
+            };
+          }
+
           default:
             this.logWarn(`Received request for unknown tool: ${request.params?.name}`, { requestId });
             return {
@@ -695,6 +884,113 @@ class MetabaseServer {
         };
       }
     });
+  }
+
+  private async _fetchPostgresDiagnostics(databaseId: number, numSlowQueries: number, targetTableName?: string, requestId?: string) {
+    const results: any = {
+      database_id: databaseId,
+      parameters_used: {
+        num_slow_queries: numSlowQueries,
+        target_table_name: targetTableName || null
+      },
+      slow_queries: [],
+      table_analysis: targetTableName ? { table_name: targetTableName, index_usage: [], scan_stats: [] } : undefined
+    };
+  
+    // Query for slow queries
+    try {
+      const slowQuerySql = `
+        SELECT queryid, calls, total_exec_time, mean_exec_time, rows, query 
+        FROM pg_stat_statements 
+        ORDER BY total_exec_time DESC 
+        LIMIT ${numSlowQueries};
+      `;
+      this.logDebug('Executing slow query diagnostics', { requestId, databaseId, query: slowQuerySql.trim().split('\\n').map(s => s.trim()).join(' ') });
+      const slowQueryPayload = { type: "native", native: { query: slowQuerySql }, database: databaseId };
+      const slowQueryResponse = await this.request<any>('/api/dataset', {
+        method: 'POST',
+        body: JSON.stringify(slowQueryPayload)
+      });
+      
+      if (slowQueryResponse.data && slowQueryResponse.data.rows) {
+          results.slow_queries = slowQueryResponse.data.rows;
+      } else if (slowQueryResponse.status === 'failed') {
+        this.logWarn('Slow query diagnostics failed to execute', { requestId, databaseId, error: slowQueryResponse.error });
+        results.slow_queries_error = `Query execution failed: ${slowQueryResponse.error}. Ensure pg_stat_statements is enabled and permissions are correct.`;
+      } else if (slowQueryResponse.error) {
+        this.logWarn('Slow query diagnostics returned an error', { requestId, databaseId, error: slowQueryResponse.error });
+        results.slow_queries_error = `Query returned an error: ${slowQueryResponse.error}.`;
+      } else {
+          this.logWarn('Unexpected response structure for slow queries', { requestId, databaseId, response: slowQueryResponse });
+          results.slow_queries_error = 'Unexpected response structure from Metabase for slow queries.';
+      }
+    } catch (error: any) {
+      this.logWarn('Failed to fetch slow queries from pg_stat_statements', { requestId, databaseId, errorMsg: error.message, errorData: error.data });
+      results.slow_queries_error = `Failed to fetch from pg_stat_statements: ${error.message || 'Unknown error'}. ${error.data?.message || ''}. Ensure the extension is enabled and Metabase user has permissions.`;
+    }
+  
+    // Query for table-specific diagnostics if target_table_name is provided
+    if (targetTableName && results.table_analysis) {
+      try {
+        // Index Usage
+        const indexUsageSql = `
+          SELECT sui.schemaname, sui.relname AS table_name, sui.indexrelname AS index_name, sui.idx_scan AS index_scans, 
+                 pg_size_pretty(pg_relation_size(pi.indexrelid)) as index_size 
+          FROM pg_stat_user_indexes sui
+          JOIN pg_indexes pi ON sui.indexrelid = pi.indexrelid
+          WHERE sui.relname = '${targetTableName.replace(/'/g, "''")}';
+        `;
+        this.logDebug('Executing index usage diagnostics', { requestId, databaseId, table: targetTableName, query: indexUsageSql.trim().split('\\n').map(s => s.trim()).join(' ') });
+        const indexUsagePayload = { type: "native", native: { query: indexUsageSql }, database: databaseId };
+        const indexUsageResponse = await this.request<any>('/api/dataset', {
+          method: 'POST',
+          body: JSON.stringify(indexUsagePayload)
+        });
+        if (indexUsageResponse.data && indexUsageResponse.data.rows) {
+            results.table_analysis.index_usage = indexUsageResponse.data.rows;
+        } else if (indexUsageResponse.status === 'failed') {
+            this.logWarn('Index usage query failed', { requestId, databaseId, table: targetTableName, error: indexUsageResponse.error });
+            results.table_analysis.index_usage_error = `Query execution failed: ${indexUsageResponse.error}`;
+        } else if (indexUsageResponse.error) {
+            this.logWarn('Index usage query returned an error', { requestId, databaseId, table: targetTableName, error: indexUsageResponse.error });
+            results.table_analysis.index_usage_error = `Query returned an error: ${indexUsageResponse.error}`;
+        } else {
+            this.logWarn('Unexpected response structure for index usage', { requestId, databaseId, response: indexUsageResponse });
+            results.table_analysis.index_usage_error = 'Unexpected response structure from Metabase for index usage.';
+        }
+  
+        // Table Scans
+        const tableScanSql = `
+          SELECT schemaname, relname AS table_name, seq_scan AS sequential_scans, idx_scan AS total_index_scans,
+                 n_live_tup as live_rows, n_dead_tup as dead_rows
+          FROM pg_stat_user_tables 
+          WHERE relname = '${targetTableName.replace(/'/g, "''")}';
+        `;
+        this.logDebug('Executing table scan diagnostics', { requestId, databaseId, table: targetTableName, query: tableScanSql.trim().split('\\n').map(s => s.trim()).join(' ') });
+        const tableScanPayload = { type: "native", native: { query: tableScanSql }, database: databaseId };
+        const tableScanResponse = await this.request<any>('/api/dataset', {
+          method: 'POST',
+          body: JSON.stringify(tableScanPayload)
+        });
+        if (tableScanResponse.data && tableScanResponse.data.rows) {
+            results.table_analysis.scan_stats = tableScanResponse.data.rows;
+        } else if (tableScanResponse.status === 'failed') {
+            this.logWarn('Table scan query failed', { requestId, databaseId, table: targetTableName, error: tableScanResponse.error });
+            results.table_analysis.scan_stats_error = `Query execution failed: ${tableScanResponse.error}`;
+        } else if (tableScanResponse.error) {
+            this.logWarn('Table scan query returned an error', { requestId, databaseId, table: targetTableName, error: tableScanResponse.error });
+            results.table_analysis.scan_stats_error = `Query returned an error: ${tableScanResponse.error}`;
+        } else {
+            this.logWarn('Unexpected response structure for table scans', { requestId, databaseId, response: tableScanResponse });
+            results.table_analysis.scan_stats_error = 'Unexpected response structure from Metabase for table scans.';
+        }
+  
+      } catch (error: any) {
+        this.logWarn('Failed to fetch table diagnostics', { requestId, databaseId, table: targetTableName, errorMsg: error.message, errorData: error.data });
+        results.table_analysis_error = `Failed to fetch diagnostics for table ${targetTableName}: ${error.message || 'Unknown error'}. ${error.data?.message || ''}`;
+      }
+    }
+    return results;
   }
 
   async run() {
