@@ -341,4 +341,52 @@ This two-step process (get schema with `get_database_schema`, then get sample ro
 *   **Formulate Accurate Queries**: Construct more complex and accurate SQL queries for creating insightful dashboards, charts, or answering specific data-related questions.
 *   **Reduce Errors**: Minimize trial-and-error by first inspecting metadata and sample data.
 
-By implementing the `get_database_schema` tool and following this exploration strategy, an AI assistant can interact with Metabase data more intelligently and autonomously.
+### AI-Assisted Database Performance Management (PostgreSQL)
+
+Beyond data exploration and schema understanding, the AI can also assist in managing and optimizing the performance of connected PostgreSQL databases. This involves identifying performance bottlenecks and suggesting improvements.
+
+**1. Identify Performance Issues**:
+The AI can leverage PostgreSQL's rich set of statistics views to diagnose performance problems:
+*   **Slow Queries**: Query `pg_stat_statements` (requires the `pg_stat_statements` extension to be enabled in PostgreSQL) to identify frequently executed and high-total-time queries.
+*   **Index Usage**: Analyze `pg_stat_user_indexes` to find unused or infrequently used indexes. It can also examine `pg_indexes` to list existing indexes and correlate this information with slow queries from `pg_stat_statements` to identify missing indexes.
+*   **Table Scans**: Check statistics (e.g., from `pg_stat_user_tables` for `seq_scan` and `idx_scan`) to find tables that are frequently scanned sequentially, which might indicate missing or ineffective indexes.
+
+**2. Proposed New Tool: `get_postgres_performance_diagnostics`**:
+To facilitate this, we propose a new MCP tool specifically for PostgreSQL performance diagnostics:
+*   **Tool Name**: `get_postgres_performance_diagnostics`
+*   **Description**: Retrieves performance diagnostics from a PostgreSQL database, including slow queries, index usage, and table scan information.
+*   **Request Schema**:
+    *   `database_id`: (number, required) The ID of the target PostgreSQL database connected to Metabase.
+    *   `num_slow_queries`: (number, optional, default: 10) The number of top slow queries to retrieve from `pg_stat_statements`.
+    *   `target_table_name`: (string, optional) Specific table name to focus index analysis on.
+    *   `get_explain_for_query_ids`: (array of numbers, optional) A list of query IDs (from `pg_stat_statements`) for which to attempt to get `EXPLAIN` plans.
+*   **Underlying Mechanism**: This tool would internally use the existing `execute_query` MCP tool to run multiple SQL queries against the specified PostgreSQL database. These queries would target views like `pg_stat_statements`, `pg_stat_user_indexes`, `pg_indexes`, `pg_stat_user_tables`, and potentially run `EXPLAIN (FORMAT JSON, ANALYZE)` for specific queries if requested. The tool would need appropriate permissions to access these views and run `EXPLAIN ANALYZE`.
+*   **Response Schema**:
+    *   A JSON object containing structured diagnostic information:
+        *   `database_id`: (number) The ID of the queried database.
+        *   `slow_queries`: (array of objects) Information on slow queries, each object including:
+            *   `queryid`: (string) Query identifier from `pg_stat_statements`.
+            *   `query`: (string) The text of the query.
+            *   `calls`: (number) Number of times executed.
+            *   `total_exec_time`: (number) Total time spent in the statement, in milliseconds.
+            *   `mean_exec_time`: (number) Mean time spent in the statement, in milliseconds.
+            *   `rows`: (number) Total number of rows retrieved or affected by the statement.
+            *   `explain_plan`: (object | null) The `EXPLAIN ANALYZE` output in JSON format, if requested and successfully retrieved.
+        *   `index_analysis`: (object) Information about index usage:
+            *   `unused_indexes`: (array of objects) Details of indexes with low usage.
+            *   `table_specific_indexes`: (array of objects, if `target_table_name` provided) Indexes for the specified table.
+        *   `table_scan_stats`: (array of objects) Statistics on table scans, indicating potential indexing issues. Each object might include:
+            *   `table_name`: (string) Name of the table.
+            *   `seq_scan`: (number) Number of sequential scans.
+            *   `idx_scan`: (number) Number of index scans.
+            *   `idx_tup_fetch`: (number) Number of live rows fetched by index scans.
+
+**3. AI-Driven Recommendations**:
+With the data from `get_postgres_performance_diagnostics`, the AI can:
+*   **Recommend New Indexes**: By analyzing slow queries (especially their `WHERE` clauses and `JOIN` conditions) and comparing them against existing indexes (from `get_database_schema` and `pg_indexes`), the AI can suggest creating new indexes. It can also analyze `EXPLAIN` plans to see if the query planner suggests missing indexes.
+*   **Suggest Query Rewrites**: For queries with suboptimal `EXPLAIN` plans (e.g., using nested loops where hash joins might be better, or performing full table scans unnecessarily), the AI can suggest alternative ways to write the query or modify database parameters.
+*   **Highlight Inefficient Indexes**: Identify unused indexes (which add overhead to write operations) or indexes that are not being used effectively by queries.
+
+This capability would transform the AI from a data consumer into a proactive assistant for database administrators, helping to maintain and improve the performance of the underlying data infrastructure.
+
+By implementing the `get_database_schema` and `get_postgres_performance_diagnostics` tools and following these exploration and analysis strategies, an AI assistant can interact with Metabase data more intelligently, autonomously, and even assist in its underlying performance management.
