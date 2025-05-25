@@ -10,6 +10,12 @@ A Model Context Protocol server that integrates AI assistants with Metabase anal
 
 This TypeScript-based MCP server provides seamless integration with the Metabase API, enabling AI assistants to directly interact with your analytics data. Designed for Claude and other MCP-compatible AI assistants, this server acts as a bridge between your analytics platform and conversational AI.
 
+A common workflow for AI assistants to explore data using this server involves:
+1. Listing available databases with `list_databases`.
+2. Retrieving the schema of a specific database using `get_database_schema`.
+3. Sampling table contents or running specific queries with `execute_query`.
+This allows the AI to understand data structure and content before performing complex analyses or visualizations.
+
 ### Key Features
 
 - **Resource Access**: Navigate Metabase resources via intuitive `metabase://` URIs
@@ -25,9 +31,11 @@ The server exposes the following tools for AI assistants:
 - `list_dashboards`: Retrieve all available dashboards in your Metabase instance
 - `list_cards`: Get all saved questions/cards in Metabase
 - `list_databases`: View all connected database sources
-- `execute_card`: Run saved questions and retrieve results with optional parameters
-- `get_dashboard_cards`: Extract all cards from a specific dashboard
-- `execute_query`: Execute custom SQL queries against any connected database
+- `get_database_schema`: Retrieves the detailed schema (tables, columns, types) for a specific database.
+- `get_postgres_performance_diagnostics`: Retrieves performance diagnostics (slow queries, index usage) for a PostgreSQL database.
+- `execute_card`: Runs saved questions and retrieves results with optional parameters.
+- `get_dashboard_cards`: Extracts all cards from a specific dashboard.
+- `execute_query`: Executes custom SQL queries against a specified database.
 
 ## Configuration
 
@@ -183,6 +191,18 @@ docker run -e METABASE_URL=https://your-metabase.com \
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+## Code Structure
+
+The server's codebase is organized into the following key files within the `src/` directory:
+
+*   **`src/index.ts`**: This is the main entry point for the MCP server. It initializes the `@modelcontextprotocol/sdk Server` instance, sets up generic request handlers for listing resources (`resources/list`, `resources/list_templates`) and reading specific resources (`resources/read`). It also handles the `tools/list` request by providing tool definitions from `src/tools.ts`, and dispatches specific `tools/call` requests to the appropriate handler functions defined in `src/tools.ts`. It also manages the overall server lifecycle and global error handling.
+
+*   **`src/metabase_client.ts`**: This file defines the `MetabaseClient` class, which is responsible for all direct interactions with the Metabase API. It handles Metabase authentication (session token and API key), constructs and sends HTTP requests to Metabase endpoints, and includes core helper methods like `_fetchPostgresDiagnostics` for complex data retrieval. All logging related to Metabase API interactions is also managed here.
+
+*   **`src/tools.ts`**: This file centralizes the definition and implementation of all MCP tools supported by the server. It exports `ALL_TOOLS_DEFINITIONS`, an array containing the name, description, and Zod input schema for each tool. For every tool, it also provides an asynchronous `handle<ToolName>` function (e.g., `handleListDashboards`) that takes the `MetabaseClient` instance and validated arguments, performs the necessary operations, and returns the tool's response.
+
+This modular structure separates concerns: `index.ts` for MCP server mechanics, `metabase_client.ts` for Metabase API abstraction, and `tools.ts` for the specific logic of each exposed tool.
+
 ## MCP Tool Schemas
 
 This section details the schemas for each MCP tool provided by the server.
@@ -283,7 +303,6 @@ This section details the schemas for each MCP tool provided by the server.
 - **Request Schema**:
   - `database_id`: (number, required) The ID of the database to query.
   - `query`: (string, required) The SQL query to execute.
-  - `query_type`: (string, required, default: "native") The type of query, typically "native" for SQL.
 - **Response Schema**:
   - A JSON object representing the execution results, typically including:
     - `status`: (string) The status of the query (e.g., "completed", "failed").
@@ -297,96 +316,74 @@ This section details the schemas for each MCP tool provided by the server.
       - `results_metadata`: (object) Metadata about the results.
     - `error`: (string | null) Error message if the query failed.
 
-## Proposal for AI Exploration of Metabase Data
+### `get_database_schema`
 
-To effectively leverage the Metabase MCP server for data analysis and visualization, an AI assistant can adopt a systematic approach to explore and understand the available data. This process involves discovering databases, understanding their schemas, and sampling their content.
+- **Description**: Retrieves the schema for a specific database, including its tables, columns, data types, and relationships. (This tool calls the Metabase API endpoint `GET /api/database/:id/metadata`).
+- **Request Schema**:
+  - `database_id`: (number, required) The ID of the database.
+- **Response Schema**:
+  - A JSON object detailing the database schema. This would typically include:
+    - `id`: (number) The database ID.
+    - `name`: (string) The database name.
+    - `tables`: (array of objects) A list of tables within the database. Each table object would include:
+        - `id`: (number) The table ID.
+        - `name`: (string) The table name.
+        - `display_name`: (string) The display name of the table.
+        - `schema`: (string) The schema the table belongs to (e.g., "public").
+        - `fields`: (array of objects) A list of columns/fields in the table. Each field object would include:
+            - `id`: (number) Field ID.
+            - `name`: (string) Field name.
+            - `display_name`: (string) Field display name.
+            - `base_type`: (string) The Metabase base type (e.g., "type/Text", "type/Integer", "type/DateTime").
+            - `effective_type`: (string) The more specific semantic type if available.
+            - `semantic_type`: (string | null) The semantic type (e.g., "type/PK", "type/FK").
+            - `fk_target_field_id`: (number | null) If a foreign key, the ID of the field it points to.
 
-1.  **Discover Available Databases**:
-    The AI can begin by using the existing `list_databases` tool. This tool provides a list of all databases connected to the Metabase instance, including their IDs, names, and types. This initial step helps the AI identify potential data sources to explore further.
+### `get_postgres_performance_diagnostics`
 
-2.  **Understand Database Structure (Proposed New Tool: `get_database_schema`)**:
-    Once a database of interest is identified (via its `database_id`), the AI needs to understand its structure. We propose a new MCP tool: `get_database_schema`.
-    *   **Tool Name**: `get_database_schema`
-    *   **Description**: Retrieves the schema for a specific database, including its tables, columns, data types, and relationships.
-    *   **Request Schema**:
-        *   `database_id`: (number, required) The ID of the database.
-    *   **Underlying API Call**: This tool would likely call the Metabase API endpoint `GET /api/database/:id/metadata`.
-    *   **Response Schema**:
-        *   A JSON object detailing the database schema. This would typically include:
-            *   `id`: (number) The database ID.
-            *   `name`: (string) The database name.
-            *   `tables`: (array of objects) A list of tables within the database. Each table object would include:
-                *   `id`: (number) The table ID.
-                *   `name`: (string) The table name.
-                *   `display_name`: (string) The display name of the table.
-                *   `schema`: (string) The schema the table belongs to (e.g., "public").
-                *   `fields`: (array of objects) A list of columns/fields in the table. Each field object would include:
-                    *   `id`: (number) Field ID.
-                    *   `name`: (string) Field name.
-                    *   `display_name`: (string) Field display name.
-                    *   `base_type`: (string) The Metabase base type (e.g., "type/Text", "type/Integer", "type/DateTime").
-                    *   `effective_type`: (string) The more specific semantic type if available.
-                    *   `semantic_type`: (string | null) The semantic type (e.g., "type/PK", "type/FK").
-                    *   `fk_target_field_id`: (number | null) If a foreign key, the ID of the field it points to.
-    This tool is crucial as it provides the AI with the necessary metadata to understand table structures, column names, data types, and relationships between tables.
+- **Description**: Retrieves performance diagnostics from a PostgreSQL database, including slow queries, index usage, and table scan information. This tool internally uses the `execute_query` MCP tool to run SQL queries against views like `pg_stat_statements`, `pg_stat_user_indexes`, `pg_indexes`, and `pg_stat_user_tables`.
+- **Request Schema**:
+  - `database_id`: (number, required) The ID of the target PostgreSQL database connected to Metabase.
+  - `num_slow_queries`: (number, optional, default: 10) The number of top slow queries to retrieve from `pg_stat_statements`.
+  - `target_table_name`: (string, optional) Specific table name to focus index analysis on (for `pg_stat_user_indexes` and `pg_stat_user_tables`).
+- **Response Schema**:
+  - A JSON object containing structured diagnostic information:
+    - `database_id`: (number) The ID of the queried database.
+    - `parameters_used`: (object) The parameters that were used for the diagnostic query.
+        - `num_slow_queries`: (number) The value of `num_slow_queries` used.
+        - `target_table_name`: (string | null) The value of `target_table_name` used.
+    - `slow_queries`: (array of objects | null) Information on slow queries, each object including:
+        - `queryid`: (string) Query identifier from `pg_stat_statements`.
+        - `query`: (string) The text of the query.
+        - `calls`: (number) Number of times executed.
+        - `total_exec_time`: (number) Total time spent in the statement, in milliseconds.
+        - `mean_exec_time`: (number) Mean time spent in the statement, in milliseconds.
+        - `rows`: (number) Total number of rows retrieved or affected by the statement.
+    - `slow_queries_error`: (string | null) Error message if fetching slow queries failed.
+    - `table_analysis`: (object | null) Information about index usage and table scans for the `target_table_name` (only present if `target_table_name` was provided).
+        - `table_name`: (string) The name of the table analyzed.
+        - `index_usage`: (array of objects | null) Details of indexes for the specified table.
+        - `index_usage_error`: (string | null) Error message if fetching index usage failed.
+        - `scan_stats`: (array of objects | null) Statistics on table scans for the specified table.
+        - `scan_stats_error`: (string | null) Error message if fetching scan statistics failed.
+    - `table_analysis_error`: (string | null) General error message if table-specific analysis failed.
 
-3.  **Sample Table Content**:
-    After obtaining the schema, the AI can get a preview of the data within specific tables. Using the existing `execute_query` tool, the AI can run queries like `SELECT * FROM your_table_name LIMIT 5;` (replacing `your_table_name` with an actual table name from the schema and adjusting the `LIMIT` as needed).
-    *   This provides sample rows, allowing the AI to understand the typical values and format of the data in each column.
+## AI-Assisted Database Performance Management (PostgreSQL)
 
-**Benefits of this Approach**:
+Beyond general data exploration, this server provides tools that can help an AI assistant in managing and optimizing the performance of connected PostgreSQL databases. This involves identifying performance bottlenecks using data retrieved by the server, which the AI can then use to suggest improvements.
 
-This two-step process (get schema with `get_database_schema`, then get sample rows with `execute_query`) empowers the AI to:
-*   **Build Context**: Understand the layout and content of databases without prior knowledge.
-*   **Formulate Accurate Queries**: Construct more complex and accurate SQL queries for creating insightful dashboards, charts, or answering specific data-related questions.
-*   **Reduce Errors**: Minimize trial-and-error by first inspecting metadata and sample data.
+### Identifying Potential Performance Issues
 
-### AI-Assisted Database Performance Management (PostgreSQL)
+The `get_postgres_performance_diagnostics` tool is designed to gather key statistics from a PostgreSQL database. An AI can use this data to look for common performance issues:
+*   **Slow Queries**: The tool can return a list of slow-running queries from `pg_stat_statements`. The AI can analyze these queries for inefficiencies.
+*   **Index Usage**: If a `target_table_name` is provided to the tool, it returns information about index scans from `pg_stat_user_indexes` and `pg_indexes`. This helps identify unused or infrequently used indexes.
+*   **Table Scans**: The tool also returns data from `pg_stat_user_tables` for the `target_table_name`, which can highlight tables frequently undergoing full sequential scans, often indicating missing or ineffective indexes.
 
-Beyond data exploration and schema understanding, the AI can also assist in managing and optimizing the performance of connected PostgreSQL databases. This involves identifying performance bottlenecks and suggesting improvements.
+### Interpreting Diagnostics and AI Recommendations
 
-**1. Identify Performance Issues**:
-The AI can leverage PostgreSQL's rich set of statistics views to diagnose performance problems:
-*   **Slow Queries**: Query `pg_stat_statements` (requires the `pg_stat_statements` extension to be enabled in PostgreSQL) to identify frequently executed and high-total-time queries.
-*   **Index Usage**: Analyze `pg_stat_user_indexes` to find unused or infrequently used indexes. It can also examine `pg_indexes` to list existing indexes and correlate this information with slow queries from `pg_stat_statements` to identify missing indexes.
-*   **Table Scans**: Check statistics (e.g., from `pg_stat_user_tables` for `seq_scan` and `idx_scan`) to find tables that are frequently scanned sequentially, which might indicate missing or ineffective indexes.
+Once the AI receives the diagnostic data from `get_postgres_performance_diagnostics`, it can:
+*   **Recommend New Indexes**: By analyzing slow queries (especially their `WHERE` clauses and `JOIN` conditions) and comparing them against existing indexes (which can be fetched using `get_database_schema` and cross-referenced with `pg_indexes` data from the diagnostics tool), the AI can suggest creating new indexes.
+*   **Suggest Query Rewrites**: For queries identified as slow, the AI could suggest alternative ways to write the query, especially if it has common anti-patterns. (Note: The current `get_postgres_performance_diagnostics` tool does not fetch `EXPLAIN` plans, which could be a valuable future enhancement for deeper query analysis.)
+*   **Highlight Inefficient Indexes**: Identify unused indexes (which add overhead to write operations) or indexes that are not being used effectively by queries based on the statistics provided.
 
-**2. Proposed New Tool: `get_postgres_performance_diagnostics`**:
-To facilitate this, we propose a new MCP tool specifically for PostgreSQL performance diagnostics:
-*   **Tool Name**: `get_postgres_performance_diagnostics`
-*   **Description**: Retrieves performance diagnostics from a PostgreSQL database, including slow queries, index usage, and table scan information.
-*   **Request Schema**:
-    *   `database_id`: (number, required) The ID of the target PostgreSQL database connected to Metabase.
-    *   `num_slow_queries`: (number, optional, default: 10) The number of top slow queries to retrieve from `pg_stat_statements`.
-    *   `target_table_name`: (string, optional) Specific table name to focus index analysis on.
-    *   `get_explain_for_query_ids`: (array of numbers, optional) A list of query IDs (from `pg_stat_statements`) for which to attempt to get `EXPLAIN` plans.
-*   **Underlying Mechanism**: This tool would internally use the existing `execute_query` MCP tool to run multiple SQL queries against the specified PostgreSQL database. These queries would target views like `pg_stat_statements`, `pg_stat_user_indexes`, `pg_indexes`, `pg_stat_user_tables`, and potentially run `EXPLAIN (FORMAT JSON, ANALYZE)` for specific queries if requested. The tool would need appropriate permissions to access these views and run `EXPLAIN ANALYZE`.
-*   **Response Schema**:
-    *   A JSON object containing structured diagnostic information:
-        *   `database_id`: (number) The ID of the queried database.
-        *   `slow_queries`: (array of objects) Information on slow queries, each object including:
-            *   `queryid`: (string) Query identifier from `pg_stat_statements`.
-            *   `query`: (string) The text of the query.
-            *   `calls`: (number) Number of times executed.
-            *   `total_exec_time`: (number) Total time spent in the statement, in milliseconds.
-            *   `mean_exec_time`: (number) Mean time spent in the statement, in milliseconds.
-            *   `rows`: (number) Total number of rows retrieved or affected by the statement.
-            *   `explain_plan`: (object | null) The `EXPLAIN ANALYZE` output in JSON format, if requested and successfully retrieved.
-        *   `index_analysis`: (object) Information about index usage:
-            *   `unused_indexes`: (array of objects) Details of indexes with low usage.
-            *   `table_specific_indexes`: (array of objects, if `target_table_name` provided) Indexes for the specified table.
-        *   `table_scan_stats`: (array of objects) Statistics on table scans, indicating potential indexing issues. Each object might include:
-            *   `table_name`: (string) Name of the table.
-            *   `seq_scan`: (number) Number of sequential scans.
-            *   `idx_scan`: (number) Number of index scans.
-            *   `idx_tup_fetch`: (number) Number of live rows fetched by index scans.
-
-**3. AI-Driven Recommendations**:
-With the data from `get_postgres_performance_diagnostics`, the AI can:
-*   **Recommend New Indexes**: By analyzing slow queries (especially their `WHERE` clauses and `JOIN` conditions) and comparing them against existing indexes (from `get_database_schema` and `pg_indexes`), the AI can suggest creating new indexes. It can also analyze `EXPLAIN` plans to see if the query planner suggests missing indexes.
-*   **Suggest Query Rewrites**: For queries with suboptimal `EXPLAIN` plans (e.g., using nested loops where hash joins might be better, or performing full table scans unnecessarily), the AI can suggest alternative ways to write the query or modify database parameters.
-*   **Highlight Inefficient Indexes**: Identify unused indexes (which add overhead to write operations) or indexes that are not being used effectively by queries.
-
-This capability would transform the AI from a data consumer into a proactive assistant for database administrators, helping to maintain and improve the performance of the underlying data infrastructure.
-
-By implementing the `get_database_schema` and `get_postgres_performance_diagnostics` tools and following these exploration and analysis strategies, an AI assistant can interact with Metabase data more intelligently, autonomously, and even assist in its underlying performance management.
+This capability allows an AI to act as a proactive assistant for database administrators, helping to maintain and improve the performance of the underlying data infrastructure connected to Metabase.
